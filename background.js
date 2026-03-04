@@ -289,7 +289,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   if (!node.notes) node.notes = [];
-  node.notes.push({ text: selectedText, time: Date.now() });
+
+  // Build a text fragment URL that jumps straight to the selected text.
+  // We use only the first ~8 words as the fragment — long fragments with
+  // footnote markers ([1], [2]), quotes, or special characters fail to match
+  // reliably. A short prefix is enough to uniquely locate the passage.
+  const baseUrl      = node.url.split('#')[0];
+  const prefixWords  = selectedText.trim().split(/\s+/).slice(0, 8).join(' ');
+  const fragmentUrl  = `${baseUrl}#:~:text=${encodeURIComponent(prefixWords)}`;
+
+  node.notes.push({ text: selectedText, url: fragmentUrl, time: Date.now() });
 
   await saveTabSession(tab.id, session);
   console.log(`[WikiTrail] Note saved to "${node.title}":`, selectedText);

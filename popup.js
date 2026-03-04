@@ -364,11 +364,17 @@ function exportTrail(trail) {
     const mins     = Math.round((n.timeSpent || 0) / 60000);
     const secs     = Math.round((n.timeSpent || 0) / 1000) % 60;
     const timeStr  = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-    const notesHtml= (n.notes || []).map(note => `
+    const notesHtml= (n.notes || []).map(note => {
+      const timeStr = new Date(note.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const textHtml = note.url
+        ? `<a class="note-link" href="${esc(note.url)}" target="_blank">${esc(note.text)}</a>`
+        : `<div class="note-text">${esc(note.text)}</div>`;
+      return `
       <div class="note">
-        <div class="note-text">${esc(note.text)}</div>
-        <div class="note-meta">${new Date(note.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
-      </div>`).join('');
+        ${textHtml}
+        <div class="note-meta">${timeStr}</div>
+      </div>`;
+    }).join('');
 
     return `
       <div class="article ${i === 0 ? 'first' : i === nodes.length-1 ? 'last' : ''}">
@@ -443,6 +449,8 @@ function exportTrail(trail) {
   .notes{margin-top:10px;margin-left:38px;display:flex;flex-direction:column;gap:6px}
   .note{background:#161616;border:1px solid #222;border-radius:5px;padding:8px 12px}
   .note-text{font-size:12px;color:#bbb;line-height:1.5}
+  .note-link{font-size:12px;color:#7eb8f7;line-height:1.5;text-decoration:none}
+  .note-link:hover{text-decoration:underline}
   .note-meta{font-size:10px;color:#444;margin-top:4px}
   footer{margin-top:40px;padding-top:16px;border-top:1px solid #1a1a1a;font-size:11px;color:#333;text-align:center}
 </style>
@@ -519,9 +527,17 @@ function openNotesDrawer(nodeData) {
       const div     = document.createElement('div');
       div.className = 'note-item';
       const timeStr = new Date(note.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const textEl  = document.createElement('div');
+
+      // If we have a fragment URL, render as a link — otherwise plain text
+      const textEl = document.createElement(note.url ? 'a' : 'div');
       textEl.textContent = note.text;
-      const timeEl  = document.createElement('div');
+      if (note.url) {
+        textEl.href      = note.url;
+        textEl.target    = '_blank';
+        textEl.className = 'note-link';
+      }
+
+      const timeEl       = document.createElement('div');
       timeEl.className   = 'note-time';
       timeEl.textContent = timeStr;
       div.appendChild(textEl);
