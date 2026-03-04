@@ -460,6 +460,42 @@
         color: #444;
         font-size: 12px;
       }
+
+      /* ── View selector ── */
+      #view-bar {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding: 5px 14px;
+        border-bottom: 1px solid #1a1a1a;
+        background: #0f0f0f;
+        gap: 6px;
+      }
+
+      #view-bar label {
+        font-size: 10px;
+        color: #555;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      #view-select {
+        background: #1a1a1a;
+        border: 1px solid #2a2a2a;
+        color: #aaa;
+        font-size: 11px;
+        font-family: "Georgia", serif;
+        padding: 3px 8px;
+        border-radius: 5px;
+        cursor: pointer;
+        outline: none;
+        flex: 0;
+      }
+
+      #view-select:hover {
+        border-color: #444;
+        color: #ccc;
+      }
     </style>
   </head>
   <body>
@@ -517,6 +553,16 @@
         <span><strong id="time-elapsed">0m</strong> elapsed</span>
       </div>
       <span id="session-start-label"></span>
+    </div>
+
+    <!-- View selector -->
+    <div id="view-bar">
+      <label for="view-select">View</label>
+      <select id="view-select">
+        <option value="network">🕸 Network</option>
+        <option value="timeline">📜 Timeline</option>
+        <option value="heatmap">🐇 Rabbit Hole</option>
+      </select>
     </div>
 
     <!-- Graph -->
