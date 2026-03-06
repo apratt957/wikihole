@@ -281,10 +281,13 @@ function renderHistoryList(trails) {
     const btnEdit    = makeActionBtn('✎', 'Rename / retag');
     const btnExportH = makeActionBtn('H', 'Export as HTML');
     const btnExportM = makeActionBtn('M', 'Export as Markdown');
+    const btnDelete  = makeActionBtn('🗑', 'Delete trail');
+    btnDelete.style.cssText = 'flex:0;padding:3px 8px;font-size:11px;color:#6a3030;background:#1a1a1a;border-color:#3a2020;';
 
     actionsEl.appendChild(btnEdit);
     actionsEl.appendChild(btnExportH);
     actionsEl.appendChild(btnExportM);
+    actionsEl.appendChild(btnDelete);
     topRow.appendChild(mainArea);
     topRow.appendChild(actionsEl);
     div.appendChild(topRow);
@@ -305,6 +308,38 @@ function renderHistoryList(trails) {
 
     btnExportH.addEventListener('click', (e) => { e.stopPropagation(); exportHtml(trail); });
     btnExportM.addEventListener('click', (e) => { e.stopPropagation(); exportMarkdown(trail); });
+
+    btnDelete.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      // Swap button to a confirm state instead of a disruptive modal
+      if (btnDelete.dataset.confirming !== 'true') {
+        btnDelete.dataset.confirming = 'true';
+        btnDelete.textContent = '?';
+        btnDelete.title = 'Click again to confirm delete';
+        btnDelete.style.color = '#e07070';
+        btnDelete.style.borderColor = '#e07070';
+        // Auto-reset after 3s if not confirmed
+        setTimeout(() => {
+          if (btnDelete.dataset.confirming === 'true') {
+            btnDelete.dataset.confirming = 'false';
+            btnDelete.textContent = '🗑';
+            btnDelete.title = 'Delete trail';
+            btnDelete.style.color = '#6a3030';
+            btnDelete.style.borderColor = '#3a2020';
+          }
+        }, 3000);
+        return;
+      }
+      // Confirmed — delete
+      try {
+        const trails = await getAllTrails();
+        trails.splice(realIdx, 1);
+        await chrome.storage.local.set({ completedTrails: trails });
+        renderHistoryList(trails);
+      } catch (err) {
+        console.error('[WikiTrail] Failed to delete trail:', err);
+      }
+    });
 
     historyList.appendChild(div);
   });
@@ -570,82 +605,190 @@ function exportHtml(trail) {
   const nodes     = trail.nodes;
   const noteTotal = nodes.reduce((a, n) => a + (n.notes?.length || 0), 0);
 
+  // ── Build unique node + link lists ──
+  const nodeMap  = new Map();
+  const linkData = [];
+  nodes.forEach((n, i) => {
+    if (!nodeMap.has(n.title))
+      nodeMap.set(n.title, { id: n.title, title: n.title, url: n.url, timeSpent: n.timeSpent || 0, index: i });
+  });
+  nodes.forEach(n => {
+    if (n.from && nodeMap.has(n.from) && nodeMap.has(n.title))
+      if (!linkData.some(l => l.source === n.from && l.target === n.title))
+        linkData.push({ source: n.from, target: n.title });
+  });
+  const nodeData = Array.from(nodeMap.values());
+
+  // ── Static force layout — computed here, baked into SVG ──
+  // Runs a simple iterative spring/repulsion simulation entirely in the
+  // extension. Output is plain SVG with hardcoded coordinates — zero JS
+  // required in the exported file, works on iOS Safari with no caveats.
+  const W = 600, H = 380;
+  const maxTime = Math.max(...nodeData.map(n => n.timeSpent), 1);
+  const rScale  = t => 6 + (Math.min(t, maxTime) / maxTime) * 12; // 6–18px
+
+  // Seed positions on a circle so the sim converges cleanly
+  nodeData.forEach((n, i) => {
+    const angle = (2 * Math.PI * i) / nodeData.length;
+    const rad   = Math.min(W, H) * 0.3;
+    n.x  = W / 2 + rad * Math.cos(angle);
+    n.y  = H / 2 + rad * Math.sin(angle);
+    n.vx = 0;
+    n.vy = 0;
+  });
+
+  // Build a lookup for fast link traversal
+  const idxById = new Map(nodeData.map((n, i) => [n.id, i]));
+  const linkedPairs = linkData.map(l => ({
+    si: idxById.get(l.source),
+    ti: idxById.get(l.target)
+  })).filter(l => l.si !== undefined && l.ti !== undefined);
+
+  const LINK_DIST   = Math.min(W, H) * 0.22;
+  const REPEL       = 2800;
+  const DAMP        = 0.82;
+  const CENTER_F    = 0.012;
+  const ITERATIONS  = 280;
+
+  for (let iter = 0; iter < ITERATIONS; iter++) {
+    const alpha = 1 - iter / ITERATIONS;
+
+    // Repulsion between all pairs
+    for (let i = 0; i < nodeData.length; i++) {
+      for (let j = i + 1; j < nodeData.length; j++) {
+        const a  = nodeData[i], b = nodeData[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d2 = dx * dx + dy * dy + 0.01;
+        const f  = (REPEL * alpha) / d2;
+        a.vx -= f * dx; a.vy -= f * dy;
+        b.vx += f * dx; b.vy += f * dy;
+      }
+    }
+
+    // Spring attraction along links
+    for (const { si, ti } of linkedPairs) {
+      const a  = nodeData[si], b = nodeData[ti];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d  = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f  = (d - LINK_DIST) * 0.3 * alpha;
+      a.vx += f * (dx / d); a.vy += f * (dy / d);
+      b.vx -= f * (dx / d); b.vy -= f * (dy / d);
+    }
+
+    // Centering
+    nodeData.forEach(n => {
+      n.vx += (W / 2 - n.x) * CENTER_F;
+      n.vy += (H / 2 - n.y) * CENTER_F;
+      n.vx *= DAMP; n.vy *= DAMP;
+      n.x  += n.vx; n.y  += n.vy;
+      // Clamp to canvas with padding
+      const r = rScale(n.timeSpent) + 14;
+      n.x = Math.max(r, Math.min(W - r, n.x));
+      n.y = Math.max(r, Math.min(H - r, n.y));
+    });
+  }
+
+  // ── Render static SVG from computed positions ──
+  const svgLines = linkData.map(l => {
+    const s = nodeData[idxById.get(l.source)];
+    const t = nodeData[idxById.get(l.target)];
+    if (!s || !t) return '';
+    return `<line x1="${s.x.toFixed(1)}" y1="${s.y.toFixed(1)}" x2="${t.x.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="#2a4a6b" stroke-width="1.5" marker-end="url(#arrow)"/>`;
+  }).join('\n');
+
+  const svgNodes = nodeData.map((n, i) => {
+    const r      = rScale(n.timeSpent).toFixed(1);
+    const isFirst = n.index === 0;
+    const isLast  = n.index === nodeData.length - 1;
+    const fill    = isFirst ? '#1a3a2a' : isLast ? '#2a2a1a' : '#1a2f4a';
+    const stroke  = isFirst ? '#4caf77' : isLast ? '#f7d67e' : '#7eb8f7';
+    const sw      = isLast  ? '2' : '1.5';
+    const label   = n.title.length > 16 ? n.title.slice(0, 14) + '…' : n.title;
+    const ly      = (parseFloat(r) + 12).toFixed(1);
+    return `<g>
+  <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>
+  <text x="${n.x.toFixed(1)}" y="${(n.y + parseFloat(ly)).toFixed(1)}" text-anchor="middle" font-size="9.5" font-family="Georgia,serif" fill="#ccc">${esc(label)}</text>
+</g>`;
+  }).join('\n');
+
+  const graphSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;background:#111;border-radius:8px;border:1px solid #1e1e1e;margin-bottom:8px">
+  <defs>
+    <marker id="arrow" viewBox="0 -4 8 8" refX="18" refY="0" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0,-4L8,0L0,4" fill="#2a4a6b"/>
+    </marker>
+  </defs>
+  ${svgLines}
+  ${svgNodes}
+</svg>`;
+
+  // ── Articles + notes ──
   const articlesHtml = nodes.map((n, i) => {
     const mins    = Math.round((n.timeSpent || 0) / 60000);
     const secs    = Math.round((n.timeSpent || 0) / 1000) % 60;
     const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
     const notesHtml = (n.notes || []).map(note => {
-      const t       = new Date(note.time).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+      const t        = new Date(note.time).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
       const textHtml = note.url
-        ? `<a class="note-link" href="${esc(note.url)}" target="_blank">${esc(note.text)}</a>`
-        : `<div class="note-text">${esc(note.text)}</div>`;
+        ? `<a class="note-link" href="${esc(note.url)}">${esc(note.text)}</a>`
+        : `<span class="note-text">${esc(note.text)}</span>`;
       return `<div class="note">${textHtml}<div class="note-meta">${t}</div></div>`;
     }).join('');
+    const cls = i === 0 ? 'first' : i === nodes.length - 1 ? 'last' : '';
+    return `<div class="article ${cls}">
+  <div class="article-top">
+    <div class="article-num">${i + 1}</div>
+    <div class="article-info">
+      <a class="article-title" href="${esc(n.url)}">${esc(n.title)}</a>
+      <div class="article-meta">${timeStr} · ${new Date(n.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+    </div>
+  </div>
+  ${notesHtml ? `<div class="notes">${notesHtml}</div>` : ''}
+</div>`;
+  }).join('\n');
 
-    return `<div class="article ${i===0?'first':i===nodes.length-1?'last':''}">
-      <div class="article-top">
-        <div class="article-num">${i+1}</div>
-        <div class="article-info">
-          <a class="article-title" href="${esc(n.url)}" target="_blank">${esc(n.title)}</a>
-          <div class="article-meta">${timeStr} · ${new Date(n.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
-        </div>
-      </div>
-      ${notesHtml ? `<div class="notes">${notesHtml}</div>` : ''}
-    </div>`;
-  }).join('');
-
-  const nodeMap  = new Map();
-  const linkData = [];
-  nodes.forEach((n,i) => { if (!nodeMap.has(n.title)) nodeMap.set(n.title,{id:n.title,title:n.title,timeSpent:n.timeSpent||0,index:i}); });
-  nodes.forEach(n => {
-    if (n.from && nodeMap.has(n.from) && nodeMap.has(n.title))
-      if (!linkData.some(l=>l.source===n.from&&l.target===n.title))
-        linkData.push({source:n.from,target:n.title});
-  });
-
-  const tagsHtml     = tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('');
+  const tagsHtml     = tags.map(t => `<span class="tag">${esc(t)}</span>`).join('');
   const questionHtml = question ? `<div class="question">"${esc(question)}"</div>` : '';
+  const uniqueCount  = nodes.filter((n, i, a) => a.findIndex(x => x.title === n.title) === i).length;
 
   const html = `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${esc(name)} — WikiTrail</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"><\/script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0f0f0f;color:#e0e0e0;font-family:Georgia,serif;max-width:860px;margin:0 auto;padding:32px 24px}
-h1{font-size:22px;color:#fff;margin-bottom:6px}
+body{background:#0f0f0f;color:#e0e0e0;font-family:Georgia,serif;max-width:800px;margin:0 auto;padding:24px 16px}
+h1{font-size:clamp(16px,5vw,22px);color:#fff;margin-bottom:6px}
 .meta{font-size:12px;color:#555;margin-bottom:8px}
 .question{font-size:13px;color:#888;font-style:italic;margin-bottom:10px;padding:10px 14px;background:#141414;border-left:2px solid #7eb8f7;border-radius:0 4px 4px 0}
-.tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:24px}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px}
 .tag{font-size:11px;color:#7eb8f7;background:#0f2035;border:1px solid #1e3a5a;border-radius:10px;padding:3px 10px}
-.stats{display:flex;gap:24px;margin-bottom:28px;padding:14px 18px;background:#141414;border-radius:8px;border:1px solid #1e1e1e}
-.stat-val{font-size:22px;color:#fff;line-height:1}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:12px;margin-bottom:24px;padding:14px 16px;background:#141414;border-radius:8px;border:1px solid #1e1e1e}
+.stat-val{font-size:clamp(18px,5vw,22px);color:#fff;line-height:1}
 .stat-label{font-size:11px;color:#555;margin-top:3px}
-#graph-wrap{background:#111;border-radius:8px;border:1px solid #1e1e1e;margin-bottom:32px;overflow:hidden}
-#graph-wrap svg{width:100%;height:420px;display:block}
-.link{stroke:#2a4a6b;stroke-width:1.5px;marker-end:url(#arrow)}
-.node circle{fill:#1a2f4a;stroke:#7eb8f7;stroke-width:1.5px}
-.node.start circle{fill:#1a3a2a;stroke:#4caf77}
-.node.last circle{fill:#2a2a1a;stroke:#f7d67e}
-.node text{fill:#ccc;font-size:10px;font-family:Georgia,serif;pointer-events:none;text-anchor:middle}
+#graph-section{margin-bottom:28px}
+.graph-hint{text-align:center;font-size:11px;color:#333;padding:4px 0 0}
 h2{font-size:15px;color:#aaa;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #1e1e1e}
 .article{padding:14px 0;border-bottom:1px solid #141414}
 .article-top{display:flex;gap:12px;align-items:flex-start}
 .article-num{min-width:26px;height:26px;border-radius:50%;background:#1a2f4a;border:1px solid #7eb8f7;display:flex;align-items:center;justify-content:center;font-size:11px;color:#7eb8f7;flex-shrink:0}
 .article.first .article-num{background:#1a3a2a;border-color:#4caf77;color:#4caf77}
 .article.last  .article-num{background:#2a2a1a;border-color:#f7d67e;color:#f7d67e}
-.article-title{color:#7eb8f7;font-size:14px;text-decoration:none}
-.article-title:hover{text-decoration:underline}
+.article-info{flex:1;min-width:0}
+.article-title{color:#7eb8f7;font-size:clamp(13px,3.5vw,15px);text-decoration:none;line-height:1.4;word-break:break-word}
 .article-meta{font-size:11px;color:#555;margin-top:3px}
 .notes{margin-top:10px;margin-left:38px;display:flex;flex-direction:column;gap:6px}
 .note{background:#161616;border:1px solid #222;border-radius:5px;padding:8px 12px}
 .note-text{font-size:12px;color:#bbb;line-height:1.5}
-.note-link{font-size:12px;color:#7eb8f7;line-height:1.5;text-decoration:none}
-.note-link:hover{text-decoration:underline}
+.note-link{font-size:12px;color:#7eb8f7;line-height:1.5;text-decoration:none;display:block}
+.note-link:hover,.note-link:active{text-decoration:underline}
 .note-meta{font-size:10px;color:#444;margin-top:4px}
 footer{margin-top:40px;padding-top:16px;border-top:1px solid #1a1a1a;font-size:11px;color:#333;text-align:center}
-</style></head><body>
+@media(max-width:480px){.notes{margin-left:0}}
+</style>
+</head>
+<body>
 <h1>${esc(name)}</h1>
 <div class="meta">${date.toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})} · started ${formatTime(date)}</div>
 ${questionHtml}
@@ -654,33 +797,20 @@ ${tagsHtml ? `<div class="tags">${tagsHtml}</div>` : ''}
   <div><div class="stat-val">${nodes.length}</div><div class="stat-label">articles</div></div>
   <div><div class="stat-val">${duration}</div><div class="stat-label">duration</div></div>
   <div><div class="stat-val">${noteTotal}</div><div class="stat-label">notes</div></div>
-  <div><div class="stat-val">${nodes.filter((n,i,a)=>a.findIndex(x=>x.title===n.title)===i).length}</div><div class="stat-label">unique articles</div></div>
+  <div><div class="stat-val">${uniqueCount}</div><div class="stat-label">unique</div></div>
 </div>
-<div id="graph-wrap"><svg id="graph-svg"></svg></div>
+<div id="graph-section">
+${graphSvg}
+<div class="graph-hint">🟢 start &nbsp;·&nbsp; 🟡 end</div>
+</div>
 <h2>Article trail</h2>
 ${articlesHtml}
 <footer>Exported from WikiTrail</footer>
-<script>
-const nodeData=${JSON.stringify(Array.from(nodeMap.values()))};
-const linkData=${JSON.stringify(linkData)};
-(function(){
-  const W=860,H=420,svg=d3.select('#graph-svg').attr('viewBox','0 0 '+W+' '+H);
-  svg.append('defs').append('marker').attr('id','arrow').attr('viewBox','0 -4 8 8').attr('refX',20).attr('refY',0).attr('markerWidth',5).attr('markerHeight',5).attr('orient','auto').append('path').attr('d','M0,-4L8,0L0,4').attr('fill','#2a4a6b');
-  const maxT=Math.max(...nodeData.map(n=>n.timeSpent),1),r=d3.scaleLinear().domain([0,maxT]).range([6,18]);
-  const sim=d3.forceSimulation(nodeData).force('link',d3.forceLink(linkData).id(d=>d.id).distance(90).strength(0.8)).force('charge',d3.forceManyBody().strength(-220)).force('center',d3.forceCenter(W/2,H/2)).force('collide',d3.forceCollide(d=>r(d.timeSpent)+14));
-  const g=svg.append('g');
-  svg.call(d3.zoom().scaleExtent([0.3,3]).on('zoom',e=>g.attr('transform',e.transform)));
-  const link=g.append('g').selectAll('line').data(linkData).join('line').attr('class','link');
-  const node=g.append('g').selectAll('g').data(nodeData).join('g').attr('class',d=>d.index===0?'node start':d.index===nodeData.length-1?'node last':'node').call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y}).on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
-  node.append('circle').attr('r',d=>r(d.timeSpent));
-  node.append('text').attr('dy',d=>r(d.timeSpent)+12).text(d=>d.title.length>20?d.title.slice(0,18)+'…':d.title);
-  sim.on('tick',()=>{link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);node.attr('transform',d=>'translate('+d.x+','+d.y+')')});
-})();
-<\/script></body></html>`;
+</body>
+</html>`;
 
   downloadFile(html, buildFilename(trail, 'html'), 'text/html;charset=utf-8');
 }
-
 // ─────────────────────────────────────────────
 //  EXPORT — MARKDOWN
 // ─────────────────────────────────────────────
