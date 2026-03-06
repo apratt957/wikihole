@@ -4,8 +4,6 @@
 
 WikiTrail is a Chrome extension that runs quietly in the background while you browse Wikipedia, recording every article you visit in order. Open the popup at any time to see your trail as an interactive graph — nodes sized by time spent, branches showing where you backtracked and went a different direction. Save notes on passages as you go, search across everything you've ever saved, and export your trails as clean HTML or Markdown documents.
 
-![WikiTrail popup showing a force-directed network graph of a Wikipedia session]()
-
 ---
 
 ## Features
