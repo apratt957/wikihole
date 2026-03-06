@@ -55,6 +55,7 @@ wikitrail/
 ├── popup.html
 ├── popup.js
 └── d3.min.js
+└── icons
 ```
 
 ---
