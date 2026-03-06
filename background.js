@@ -14,16 +14,17 @@ function isWikiUrl(url) {
 
 function titleFromUrl(url) {
   // Strip fragment (#...) and query string (?...) before matching
-  const clean = url.split('#')[0].split('?')[0];
+  const clean = url.split("#")[0].split("?")[0];
   const match = clean.match(WIKI_PATTERN);
   if (!match) return null;
-  return decodeURIComponent(match[2]).replace(/_/g, ' ');
+  return decodeURIComponent(match[2]).replace(/_/g, " ");
 }
 
 // ── Per-tab session storage (keyed by tabId) ──
 // activeTabSessions: { [tabId]: session }
 async function getAllSessions() {
-  const { activeTabSessions } = await chrome.storage.local.get('activeTabSessions');
+  const { activeTabSessions } =
+    await chrome.storage.local.get("activeTabSessions");
   return activeTabSessions || {};
 }
 
@@ -42,9 +43,9 @@ async function saveTabSession(tabId, session) {
     }
     await chrome.storage.local.set({ activeTabSessions: all });
   } catch (e) {
-    console.error('[WikiTrail] Failed to save session:', e);
+    console.error("[WikiTrail] Failed to save session:", e);
     if (chrome.runtime.lastError) {
-      console.error('[WikiTrail] lastError:', chrome.runtime.lastError.message);
+      console.error("[WikiTrail] lastError:", chrome.runtime.lastError.message);
     }
   }
 }
@@ -56,12 +57,13 @@ async function closeTabSession(tabId) {
       await saveTabSession(tabId, null);
       return;
     }
-    const { completedTrails = [] } = await chrome.storage.local.get('completedTrails');
+    const { completedTrails = [] } =
+      await chrome.storage.local.get("completedTrails");
     completedTrails.push({ ...session, endTime: Date.now() });
     await chrome.storage.local.set({ completedTrails });
     await saveTabSession(tabId, null);
   } catch (e) {
-    console.error('[WikiTrail] Failed to close session:', e);
+    console.error("[WikiTrail] Failed to close session:", e);
   }
 }
 
@@ -72,7 +74,7 @@ async function closeTabSession(tabId) {
 // ─────────────────────────────────────────────
 
 async function getTabState() {
-  const { tabState } = await chrome.storage.session.get('tabState');
+  const { tabState } = await chrome.storage.session.get("tabState");
   return tabState || {};
 }
 
@@ -80,7 +82,7 @@ async function setTabState(state) {
   try {
     await chrome.storage.session.set({ tabState: state });
   } catch (e) {
-    console.error('[WikiTrail] Failed to save tabState:', e);
+    console.error("[WikiTrail] Failed to save tabState:", e);
   }
 }
 
@@ -90,8 +92,8 @@ async function setTabState(state) {
 
 async function handleNavigation(tabId, url) {
   const tabState = await getTabState();
-  const prev     = tabState[tabId] || null;
-  const session  = await getTabSession(tabId);
+  const prev = tabState[tabId] || null;
+  const session = await getTabSession(tabId);
 
   const nowOnWiki = isWikiUrl(url);
 
@@ -117,7 +119,12 @@ async function handleNavigation(tabId, url) {
   if (!title) return;
 
   // Skip special pages
-  if (/^(File|Special|Talk|User|Wikipedia|Help|Portal|Category|Template):/i.test(title)) return;
+  if (
+    /^(File|Special|Talk|User|Wikipedia|Help|Portal|Category|Template):/i.test(
+      title,
+    )
+  )
+    return;
 
   // Same page reload — ignore
   if (prev && prev.title === title) return;
@@ -130,17 +137,19 @@ async function handleNavigation(tabId, url) {
   // ── Start a new session for this tab if none exists ──
   if (!session) {
     const newSession = {
-      id       : `${tabId}-${Date.now()}`,
-      tabId    : tabId,
+      id: `${tabId}-${Date.now()}`,
+      tabId: tabId,
       startTime: Date.now(),
-      nodes    : [{
-        title    : title,
-        url      : url,
-        from     : null,
-        time     : Date.now(),
-        timeSpent: 0,
-        notes    : []
-      }]
+      nodes: [
+        {
+          title: title,
+          url: url,
+          from: null,
+          time: Date.now(),
+          timeSpent: 0,
+          notes: [],
+        },
+      ],
     };
     tabState[tabId] = { url, title, arrivedAt: Date.now() };
     await setTabState(tabState);
@@ -150,7 +159,7 @@ async function handleNavigation(tabId, url) {
 
   // ── Add node to existing session ──
   const fromTitle = prev ? prev.title : null;
-  const lastNode  = session.nodes[session.nodes.length - 1];
+  const lastNode = session.nodes[session.nodes.length - 1];
 
   if (lastNode && lastNode.title === title) {
     tabState[tabId] = { url, title, arrivedAt: Date.now() };
@@ -159,12 +168,12 @@ async function handleNavigation(tabId, url) {
   }
 
   session.nodes.push({
-    title    : title,
-    url      : url,
-    from     : fromTitle,
-    time     : Date.now(),
+    title: title,
+    url: url,
+    from: fromTitle,
+    time: Date.now(),
     timeSpent: 0,
-    notes    : []
+    notes: [],
   });
 
   tabState[tabId] = { url, title, arrivedAt: Date.now() };
@@ -173,7 +182,7 @@ async function handleNavigation(tabId, url) {
 }
 
 function updateTimeSpent(session, title, arrivedAt) {
-  const node = session.nodes.find(n => n.title === title);
+  const node = session.nodes.find((n) => n.title === title);
   if (node) {
     node.timeSpent = (node.timeSpent || 0) + (Date.now() - arrivedAt);
   }
@@ -184,15 +193,15 @@ function updateTimeSpent(session, title, arrivedAt) {
 // ─────────────────────────────────────────────
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url) {
+  if (changeInfo.status === "complete" && tab.url) {
     handleNavigation(tabId, tab.url);
   }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const tabState = await getTabState();
-  const prev     = tabState[tabId] || null;
-  const session  = await getTabSession(tabId);
+  const prev = tabState[tabId] || null;
+  const session = await getTabSession(tabId);
 
   if (prev && session) {
     updateTimeSpent(session, prev.title, prev.arrivedAt);
@@ -207,7 +216,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   try {
-    const tab      = await chrome.tabs.get(tabId);
+    const tab = await chrome.tabs.get(tabId);
     const tabState = await getTabState();
 
     if (tab.url && isWikiUrl(tab.url)) {
@@ -230,10 +239,10 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 
   try {
     const tabState = await getTabState();
-    const all      = await getAllSessions();
+    const all = await getAllSessions();
 
     for (const [tabIdStr, state] of Object.entries(tabState)) {
-      const tabId  = parseInt(tabIdStr);
+      const tabId = parseInt(tabIdStr);
       const session = all[tabId];
       if (session) {
         updateTimeSpent(session, state.title, state.arrivedAt);
@@ -245,34 +254,34 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     await chrome.storage.local.set({ activeTabSessions: all });
     await setTabState(tabState);
   } catch (e) {
-    console.error('[WikiTrail] Focus blur save failed:', e);
+    console.error("[WikiTrail] Focus blur save failed:", e);
   }
 });
 
 // ─────────────────────────────────────────────
-//  CONTEXT MENU — "Save to current hole"
+//  CONTEXT MENU — "Save to current trail node"
 // ─────────────────────────────────────────────
 
 function registerContextMenu() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
-      id                 : 'save-to-hole',
-      title              : 'Save to current hole',
-      contexts           : ['selection'],
-      documentUrlPatterns: ['*://*.wikipedia.org/*']
+      id: "save-to-node",
+      title: "Save to current trail node",
+      contexts: ["selection"],
+      documentUrlPatterns: ["*://*.wikipedia.org/*"],
     });
   });
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== 'save-to-hole') return;
+  if (info.menuItemId !== "save-to-node") return;
 
   const selectedText = info.selectionText?.trim();
   if (!selectedText) return;
 
   const session = await getTabSession(tab.id);
   if (!session) {
-    console.log('[WikiTrail] No active session for this tab — note not saved.');
+    console.log("[WikiTrail] No active session for this tab — note not saved.");
     return;
   }
 
@@ -280,11 +289,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!currentTitle) return;
 
   // Match by title, fall back to URL match
-  const node = session.nodes.find(n => n.title === currentTitle)
-            || session.nodes.find(n => n.url.split('#')[0] === tab.url.split('#')[0]);
+  const node =
+    session.nodes.find((n) => n.title === currentTitle) ||
+    session.nodes.find((n) => n.url.split("#")[0] === tab.url.split("#")[0]);
 
   if (!node) {
-    console.log('[WikiTrail] Node not found for title:', currentTitle);
+    console.log("[WikiTrail] Node not found for title:", currentTitle);
     return;
   }
 
@@ -294,9 +304,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   // We use only the first ~8 words as the fragment — long fragments with
   // footnote markers ([1], [2]), quotes, or special characters fail to match
   // reliably. A short prefix is enough to uniquely locate the passage.
-  const baseUrl      = node.url.split('#')[0];
-  const prefixWords  = selectedText.trim().split(/\s+/).slice(0, 8).join(' ');
-  const fragmentUrl  = `${baseUrl}#:~:text=${encodeURIComponent(prefixWords)}`;
+  const baseUrl = node.url.split("#")[0];
+  const prefixWords = selectedText.trim().split(/\s+/).slice(0, 8).join(" ");
+  const fragmentUrl = `${baseUrl}#:~:text=${encodeURIComponent(prefixWords)}`;
 
   node.notes.push({ text: selectedText, url: fragmentUrl, time: Date.now() });
 
@@ -309,17 +319,18 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // ─────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(async () => {
-  await chrome.storage.local.remove('activeSession');      // remove old single-session key
-  await chrome.storage.local.remove('activeTabSessions');  // start fresh
+  await chrome.storage.local.remove("activeSession"); // remove old single-session key
+  await chrome.storage.local.remove("activeTabSessions"); // start fresh
   registerContextMenu();
-  console.log('WikiTrail installed.');
+  console.log("WikiTrail installed.");
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   registerContextMenu();
   // On browser restart, close all open sessions cleanly
   const all = await getAllSessions();
-  const { completedTrails = [] } = await chrome.storage.local.get('completedTrails');
+  const { completedTrails = [] } =
+    await chrome.storage.local.get("completedTrails");
   for (const session of Object.values(all)) {
     if (session && session.nodes.length > 0) {
       completedTrails.push({ ...session, endTime: Date.now() });
